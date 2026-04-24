@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+*.so
+
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Outputs (generated figures, models, results)
+outputs_*/
+outputs_normal_likelihood/
+
+# Data files
+*.xlsx
+*.xls
+*.csv
+*.db
+
+# PyTorch models
+*.pt
+*.pth
+
+# Pickle
+*.pkl
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Optuna
+*.db
