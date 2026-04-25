@@ -87,8 +87,8 @@ def make_objective(
     # Datasets are built per trial because T varies per trial.
 
     def objective(trial: optuna.Trial) -> float:
-        M = trial.suggest_categorical("M", [8, 16, 32, 64, 128])
-        Q = trial.suggest_int("Q", 2, 46, step=2)
+        M = trial.suggest_int("M", 1, 300)
+        Q = trial.suggest_int("Q", 1, 70)
         T = trial.suggest_categorical("T", [1, 2, 3, 7, 14, 21, 30])
 
         # ── Build train/val sample pairs for this T ────────────────────────

@@ -22,14 +22,14 @@ class ChainedGammaLikelihood(gpy.likelihoods.Likelihood):
         #   The +1 shift is a zero-gradient-kill alternative to .clamp(min=1):
         #   gradients flow to zero as f→-∞ but are never exactly zero.
         #   Upper bound 11: softplus(f)+1 ≤ 11  ⇒  f ≤ softplus_inv(10) ≈ 10.
-        alphas = (torch.nn.functional.softplus(f_alpha) + 1.0).clamp(max=11.0)
+        alphas = torch.nn.functional.softplus(f_alpha).clamp(min=1e-3, max=8.0)
 
         # beta:  softplus(f) maps ℝ→(0,∞); clamp to [1e-4, 10].
         #   Lower 1e-4: prevents β→0 (rate near zero → E[y] diverges).
         #   Upper 10  : prevents β·y overflow (y∈[1e-6,1] → β·y ≤ 10).
         #   The clamp only activates outside normal operating range, so
         #   gradients are preserved through the entire training distribution.
-        betas  = torch.nn.functional.softplus(f_beta).clamp(min=1e-4, max=10.0)
+        betas  = torch.nn.functional.softplus(f_beta).clamp(min=1e-3, max=8.0)
 
         return dist.Independent(dist.Gamma(alphas, betas), 1)
 

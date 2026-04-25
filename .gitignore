@@ -17,24 +17,10 @@ ENV/
 
 # Jupyter
 .ipynb_checkpoints/
-*.ipynb
-
-# Outputs (generated figures, models, results)
-outputs_*/
-outputs_normal_likelihood/
 
 # Data files
-*.xlsx
-*.xls
-*.csv
-*.db
+*.png
 
-# PyTorch models
-*.pt
-*.pth
-
-# Pickle
-*.pkl
 
 # OS
 .DS_Store
@@ -46,5 +32,3 @@ Thumbs.db
 *.swp
 *.swo
 
-# Optuna
-*.db

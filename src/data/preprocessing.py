@@ -27,23 +27,27 @@ import torch
 N_TRAIN = 3554
 
 
-def load_and_preprocess(
+def load_raw(
     excel_path: str,
     sheet: int = 1,
-    n_train: int = N_TRAIN,
 ) -> tuple:
     """
-    Load the reservoir Excel file and return normalised train / test tensors.
+    Load reservoir volume data from Excel and return the raw DataFrame.
+
+    Applies only structural cleaning (coerce to numeric, replace non-positive
+    values with NaN). No imputation or normalisation is performed, so this
+    function is the single entry point for the raw data used by both the
+    model pipeline and any downstream analysis / visualisation.
 
     Parameters
     ----------
     excel_path : path to `Ejercicio hidrología v2.xlsx`
     sheet      : sheet index (0-based); default 1 = "Datos generales"
-    n_train    : number of leading rows allocated to training
 
     Returns
     -------
-    V_train_norm, V_test_norm, scaler, reservoir_names
+    df_vol          : pd.DataFrame  (T_total, D)  raw volumes in m³ (NaN where missing)
+    reservoir_names : list[str]
     """
     # ── 1. Load Excel (two-level column header) ───────────────────────────
     df = pd.read_excel(excel_path, sheet_name=sheet, header=[0, 1])
@@ -63,17 +67,39 @@ def load_and_preprocess(
     df_vol.columns = [c[0] for c in df_vol.columns]   # flat reservoir names
     reservoir_names = list(df_vol.columns)
 
-    # ── 3. Clean: coerce to numeric, fill non-positive / NaN ──────────────
+    # ── 3. Coerce to numeric; mark non-positive values as missing ─────────
     df_vol = df_vol.replace(",", "", regex=True)       # strip thousands sep
     df_vol = df_vol.apply(pd.to_numeric, errors="coerce")
-
-    # Zero / negative volumes mean "reservoir didn't exist yet" or missing
     df_vol[df_vol <= 0] = np.nan
 
-    # Forward-fill (respect temporal order), then back-fill start gaps
-    df_vol = df_vol.ffill().bfill()
+    return df_vol, reservoir_names
 
-    # Any column still all-NaN → fill with 0
+
+def load_and_preprocess(
+    excel_path: str,
+    sheet: int = 1,
+    n_train: int = N_TRAIN,
+) -> tuple:
+    """
+    Load the reservoir Excel file and return normalised train / test tensors.
+
+    Parameters
+    ----------
+    excel_path : path to `Ejercicio hidrología v2.xlsx`
+    sheet      : sheet index (0-based); default 1 = "Datos generales"
+    n_train    : number of leading rows allocated to training
+
+    Returns
+    -------
+    V_train_norm, V_test_norm, scaler, reservoir_names
+    """
+    # ── 1-3. Load and structurally clean via shared entry point ───────────
+    df_vol, reservoir_names = load_raw(excel_path, sheet=sheet)
+
+    # ── 3b. Imputation: forward-fill then fill remaining NaN with 0 ───────
+    # Zero / negative volumes mean "reservoir didn't exist yet" or missing.
+    # Forward-fill respects temporal order; 0 fills only still-missing cells.
+    df_vol = df_vol.ffill()
     df_vol = df_vol.fillna(0.0)
 
     values = df_vol.values.astype(np.float32)   # (T_total, D)
