@@ -34,7 +34,7 @@ from src.models.likelihoods import ChainedGammaLikelihood, GaussianLMCLikelihood
 from run import main
 
 # ── Overnight configuration ───────────────────────────────────────────────────
-N_OPTUNA_TRIALS_OVERNIGHT = 40    # more trials for better coverage
+N_OPTUNA_TRIALS_OVERNIGHT = 8800    # more trials for better coverage
 N_EPOCHS_OPTUNA_OVERNIGHT = 500  # longer per trial — reliable ELBO signal
 N_EPOCHS_FINAL_OVERNIGHT  = 8000  # longer final training overnight
 
@@ -76,10 +76,10 @@ def run_for_likelihood(likelihood_cls, out_dir_name: str) -> None:
 
 if __name__ == "__main__":
     # Gaussian first — faster, good sanity-check while gamma runs later
-    # run_for_likelihood(GaussianLMCLikelihood, "outputs_gaussian")
+    run_for_likelihood(GaussianLMCLikelihood, "outputs_gaussian")
 
     # Gamma second — principled model for positive skewed reservoir volumes
-    run_for_likelihood(ChainedGammaLikelihood, "outputs_gamma")
+    # run_for_likelihood(ChainedGammaLikelihood, "outputs_gamma")
 
     print("\n" + "=" * 72)
     print("  Overnight run complete.")
