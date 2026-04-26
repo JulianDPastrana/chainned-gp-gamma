@@ -34,9 +34,9 @@ from src.models.likelihoods import ChainedGammaLikelihood, GaussianLMCLikelihood
 from run import main
 
 # ── Overnight configuration ───────────────────────────────────────────────────
-N_OPTUNA_TRIALS_OVERNIGHT = 8800    # more trials for better coverage
-N_EPOCHS_OPTUNA_OVERNIGHT = 500  # longer per trial — reliable ELBO signal
-N_EPOCHS_FINAL_OVERNIGHT  = 8000  # longer final training overnight
+N_OPTUNA_TRIALS_OVERNIGHT = 0    # more trials for better coverage
+N_EPOCHS_OPTUNA_OVERNIGHT = 800  # longer per trial — reliable ELBO signal
+N_EPOCHS_FINAL_OVERNIGHT  = 300  # longer final training overnight
 
 # HyperbandPruner: brackets successive halving so a trial that is in the
 # bottom half at epoch 50 is pruned before epoch 100, etc.

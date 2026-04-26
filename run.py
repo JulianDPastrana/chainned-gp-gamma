@@ -56,7 +56,7 @@ N_OPTUNA_TRIALS     = 15         # Optuna trials
 N_EPOCHS_OPTUNA     = 1000         # epochs per trial (fewer than final training)
 N_EPOCHS_FINAL      = 5000         # epochs for final model (best params, full train set)
 
-BATCH_SIZE          = 3554
+BATCH_SIZE          = 500#3554
 LR_ADAM             = 0.01
 LR_NGD              = 0.1
 SEED                = np.random.randint(0, 1_000_000)

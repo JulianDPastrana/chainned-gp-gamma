@@ -1,0 +1,4 @@
+Model      : ChdGP + GaussianLMCLikelihood
+H=1  M=294  Q=69  T=2
+NLPD_test      : -15.084432
+NLPD_val_optuna: -10.566678
