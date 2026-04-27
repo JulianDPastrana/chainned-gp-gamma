@@ -37,6 +37,19 @@ import matplotlib
 matplotlib.use("Agg")          # non-interactive backend — safe for scripts/servers
 import matplotlib.pyplot as plt
 
+
+def _load_best_params_file(path: Path) -> dict:
+    """Load best params saved as key=value lines."""
+    params = {}
+    with open(path, "r", encoding="utf-8") as f:
+        for raw in f:
+            line = raw.strip()
+            if not line or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            params[k.strip()] = v.strip()
+    return params
+
 # ── Configuration ──────────────────────────────────────────────────────────────
 EXCEL_PATH          = "Ejercicio hidrología v2.xlsx"
 SHEET_INDEX         = 1           # "Datos generales" (0-based)
@@ -48,8 +61,12 @@ H                   = 1           # forecast horizon — change here for multi-h
 # GaussianLMCLikelihood (faster, symmetric — useful as a sanity-check baseline).
 # Both use the same LMC model (num_tasks=2*D): first D outputs → distribution
 # location, last D outputs → scale/rate via softplus.
-# LIKELIHOOD          = ChainedGammaLikelihood   # ← swap to GaussianLMCLikelihood to compare
-LIKELIHOOD          = GaussianLMCLikelihood   # ← swap to ChainedGammaLikelihood for the principled choice
+LIKELIHOOD_CHOICES  = {
+    "gaussian": GaussianLMCLikelihood,
+    "gamma": ChainedGammaLikelihood,
+}
+LIKELIHOOD_NAME     = "gaussian"
+LIKELIHOOD          = LIKELIHOOD_CHOICES[LIKELIHOOD_NAME]
 # ─────────────────────────────────────────────────────────────────────────────
 
 N_OPTUNA_TRIALS     = 15         # Optuna trials
@@ -144,6 +161,9 @@ def main(
     pruner=None,
     sampler=None,
     seed=None,
+    horizon=None,
+    best_params=None,
+    best_params_file=None,
 ):
     """
     Run the full pipeline.
@@ -163,6 +183,10 @@ def main(
     pruner          : optuna.pruners.BasePruner instance
     sampler         : optuna.samplers.BaseSampler instance (None → TPE)
     seed            : integer random seed (None → random)
+    horizon         : forecast horizon override (None → module constant H)
+    best_params     : dict with fixed params {"M", "Q", "T"} to skip Optuna
+    best_params_file: Path to a key=value file containing M/Q/T (and optional
+                      val_nlpd) to skip Optuna
     """
     # Apply defaults from module-level constants
     if likelihood is None:
@@ -181,6 +205,12 @@ def main(
         sampler = DEFAULT_SAMPLER
     if seed is None:
         seed = SEED
+
+    if horizon is None:
+        horizon = H
+
+    if best_params is None and best_params_file is not None:
+        best_params = _load_best_params_file(Path(best_params_file))
 
     out_dir = Path(out_dir)
 
@@ -209,60 +239,75 @@ def main(
     V_test_norm  = V_test_norm.to(device)
 
     # ── 2. Optuna study ──────────────────────────────────────────────────
-    print(f"\n[2/5] Optuna search — {n_optuna_trials} trials, H={H}, likelihood={likelihood.__name__}...")
+    val_nlpd_optuna = None
+    if best_params is None:
+        print(f"\n[2/5] Optuna search — {n_optuna_trials} trials, H={horizon}, likelihood={likelihood.__name__}...")
 
-    objective = make_objective(
-        V_train_norm=V_train_norm,
-        D=D,
-        H=H,
-        n_epochs_per_trial=n_epochs_optuna,
-        batch_size=BATCH_SIZE,
-        lr_adam=LR_ADAM,
-        lr_ngd=LR_NGD,
-        likelihood_cls=likelihood,
-        device=device,
-    )
+        objective = make_objective(
+            V_train_norm=V_train_norm,
+            D=D,
+            H=horizon,
+            n_epochs_per_trial=n_epochs_optuna,
+            batch_size=BATCH_SIZE,
+            lr_adam=LR_ADAM,
+            lr_ngd=LR_NGD,
+            likelihood_cls=likelihood,
+            device=device,
+        )
 
-    study_name = f"chdgamma_{likelihood.__name__}_H{H}"
-    OPTUNA_DB  = str(out_dir / "optuna" / f"{study_name}.db")
-    print(f"  Study DB : {OPTUNA_DB}")
+        study_name = f"chdgamma_{likelihood.__name__}_H{horizon}"
+        OPTUNA_DB  = str(out_dir / "optuna" / f"{study_name}.db")
+        print(f"  Study DB : {OPTUNA_DB}")
 
-    # Persist study to SQLite — re-running this script resumes the study
-    study = optuna.create_study(
-        study_name=study_name,
-        direction="minimize",
-        storage=f"sqlite:///{OPTUNA_DB}",
-        load_if_exists=True,
-        pruner=pruner,
-        sampler=sampler,
-    )
-    study.optimize(
-        objective,
-        n_trials=n_optuna_trials,
-        show_progress_bar=True,
-        catch=(ValueError, RuntimeError),   # trial-level errors → TrialFailed, not study crash
-    )
+        # Persist study to SQLite — re-running this script resumes the study
+        study = optuna.create_study(
+            study_name=study_name,
+            direction="minimize",
+            storage=f"sqlite:///{OPTUNA_DB}",
+            load_if_exists=True,
+            pruner=pruner,
+            sampler=sampler,
+        )
+        study.optimize(
+            objective,
+            n_trials=n_optuna_trials,
+            show_progress_bar=True,
+            catch=(ValueError, RuntimeError),   # trial-level errors → TrialFailed, not study crash
+        )
 
-    best = study.best_params
-    print(f"\n  Best params     : {best}")
-    print(f"  Best NLPD (val) : {study.best_value:.4f}")
+        best = study.best_params
+        val_nlpd_optuna = float(study.best_value)
+        print(f"\n  Best params     : {best}")
+        print(f"  Best NLPD (val) : {val_nlpd_optuna:.4f}")
 
-    # Persist best params as a text file
-    results_file = out_dir / "results" / f"best_params_H{H}.txt"
-    with open(results_file, "w") as f:
-        f.write(f"H={H}\n")
-        for k, v in best.items():
-            f.write(f"{k}={v}\n")
-        f.write(f"val_nlpd={study.best_value:.6f}\n")
+        # Persist best params as a text file
+        results_file = out_dir / "results" / f"best_params_H{horizon}.txt"
+        with open(results_file, "w", encoding="utf-8") as f:
+            f.write(f"H={horizon}\n")
+            for k, v in best.items():
+                f.write(f"{k}={v}\n")
+            f.write(f"val_nlpd={val_nlpd_optuna:.6f}\n")
+    else:
+        print(f"\n[2/5] Optuna skipped — using fixed params, H={horizon}, likelihood={likelihood.__name__}...")
+        best = dict(best_params)
+        if "val_nlpd" in best:
+            try:
+                val_nlpd_optuna = float(best["val_nlpd"])
+            except (TypeError, ValueError):
+                val_nlpd_optuna = None
 
-    M_best = best["M"]
-    Q_best = best["Q"]
-    T_best = best["T"]
+        for key in ("M", "Q", "T"):
+            if key not in best:
+                raise ValueError(f"Missing required fixed param '{key}'")
+
+    M_best = int(best["M"])
+    Q_best = int(best["Q"])
+    T_best = int(best["T"])
 
     # ── 3. Final retraining on the FULL training set ─────────────────────
-    print(f"\n[3/5] Retraining — M={M_best}, Q={Q_best}, T={T_best}, H={H}...")
+    print(f"\n[3/5] Retraining — M={M_best}, Q={Q_best}, T={T_best}, H={horizon}...")
 
-    X_train, Y_train = build_dataset(V_train_norm, T_best, H)
+    X_train, Y_train = build_dataset(V_train_norm, T_best, horizon)
     Y_train = Y_train.clamp(min=1e-6)
     print(f"  Training samples: {len(X_train)}")
 
@@ -299,9 +344,9 @@ def main(
     )
 
     # Save model and scaler
-    torch.save(model.state_dict(),               out_dir / "models" / f"model_H{H}.pt")
-    torch.save(likelihood_instance.state_dict(), out_dir / "models" / f"likelihood_H{H}.pt")
-    joblib.dump(scaler,                          out_dir / "models" / f"scaler_H{H}.pkl")
+    torch.save(model.state_dict(),               out_dir / "models" / f"model_H{horizon}.pt")
+    torch.save(likelihood_instance.state_dict(), out_dir / "models" / f"likelihood_H{horizon}.pt")
+    joblib.dump(scaler,                          out_dir / "models" / f"scaler_H{horizon}.pkl")
     print("  Checkpoints saved.")
 
     # ── 4. Test evaluation — ONLY here, never before ─────────────────────
@@ -310,7 +355,7 @@ def main(
     # Prepend the last T_best observations from training as input context
     # so the very first test sample has a valid input window.
     V_test_ctx = torch.cat([V_train_norm[-T_best:], V_test_norm], dim=0)
-    X_test, Y_test = build_dataset(V_test_ctx, T_best, H)
+    X_test, Y_test = build_dataset(V_test_ctx, T_best, horizon)
     Y_test = Y_test.clamp(min=1e-6)
     print(f"  Test samples    : {len(X_test)}")
 
@@ -320,17 +365,18 @@ def main(
     mean, median, p025, p975 = predict(model, likelihood_instance, X_test)
 
     # Save test metrics
-    with open(out_dir / "results" / f"metrics_H{H}.txt", "w") as f:
+    with open(out_dir / "results" / f"metrics_H{horizon}.txt", "w", encoding="utf-8") as f:
         f.write(f"Model      : ChdGP + {likelihood_cls.__name__}\n")
-        f.write(f"H={H}  M={M_best}  Q={Q_best}  T={T_best}\n")
+        f.write(f"H={horizon}  M={M_best}  Q={Q_best}  T={T_best}\n")
         f.write(f"NLPD_test      : {nlpd_test:.6f}\n")
-        f.write(f"NLPD_val_optuna: {study.best_value:.6f}\n")
+        if val_nlpd_optuna is not None:
+            f.write(f"NLPD_val_optuna: {val_nlpd_optuna:.6f}\n")
 
     # ── 5. Forecast plots ────────────────────────────────────────────────
     print("\n[5/5] Saving per-reservoir forecast plots...")
     save_forecast_plots(
         Y_test, mean, median, p025, p975,
-        reservoir_names, scaler, out_dir, H,
+        reservoir_names, scaler, out_dir, horizon,
     )
 
     print(f"\nAll outputs saved to '{out_dir}/'")

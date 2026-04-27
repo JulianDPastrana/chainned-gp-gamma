@@ -1,24 +1,21 @@
 """
 run_overnight.py — Unattended overnight run for both likelihoods.
 
-Runs the full pipeline (Optuna search → final retraining → test evaluation)
-sequentially for GaussianLMCLikelihood then ChainedGammaLikelihood.
+Runs training + test evaluation sequentially for GaussianLMCLikelihood and
+ChainedGammaLikelihood across multiple horizons, reusing already tuned
+Optuna best hyperparameters (no Optuna search in this script).
 
 Outputs
 -------
   outputs_gaussian/   ← Gaussian baseline (faster, finishes first)
   outputs_gamma/      ← Chained-Gamma model (principled, slower)
 
-Optuna strategy
----------------
-A more explorative configuration is used compared to the default run.py:
-  - More trials (N_OPTUNA_TRIALS_OVERNIGHT) to cover the search space better.
-  - More epochs per trial so the ELBO signal is reliable before pruning.
-  - HyperbandPruner: aggressive early-stopping for clearly bad trials while
-    protecting promising ones through successive halving brackets.
-    This lets us run many more trials in the same wall-clock time.
-  - CmaEsSampler: covariance-matrix adaptation — much better than TPE for
-    continuous hyperparameter spaces (M, Q are treated as continuous here).
+Train-only strategy
+-------------------
+  - No Optuna is executed.
+  - For each likelihood, best params are read from:
+      outputs_<likelihood>/results/best_params_H1.txt
+  - The same M/Q/T are reused for all requested horizons.
 
 Usage
 -----
@@ -27,63 +24,55 @@ Usage
     python run_overnight.py | tee overnight.log
 """
 
-import optuna
 from pathlib import Path
 
 from src.models.likelihoods import ChainedGammaLikelihood, GaussianLMCLikelihood
 from run import main
 
 # ── Overnight configuration ───────────────────────────────────────────────────
-N_OPTUNA_TRIALS_OVERNIGHT = 0    # more trials for better coverage
-N_EPOCHS_OPTUNA_OVERNIGHT = 800  # longer per trial — reliable ELBO signal
-N_EPOCHS_FINAL_OVERNIGHT  = 300  # longer final training overnight
-
-# HyperbandPruner: brackets successive halving so a trial that is in the
-# bottom half at epoch 50 is pruned before epoch 100, etc.
-# min_resource=30   → never prune in the first 30 epochs (GP warm-up)
-# max_resource=N_EPOCHS_OPTUNA_OVERNIGHT → full budget for bracket calculation
-# reduction_factor=3 → each bracket is 3× longer than the previous
-OVERNIGHT_PRUNER = optuna.pruners.HyperbandPruner(
-    min_resource=30,
-    max_resource=N_EPOCHS_OPTUNA_OVERNIGHT,
-    reduction_factor=3,
-)
-
-# RandomSampler: pure random search — no model-based assumptions, uniform
-# coverage of the search space. Good when the number of trials is large
-# enough (>=40) and the space is not too smooth for Bayesian methods to help.
-OVERNIGHT_SAMPLER = optuna.samplers.RandomSampler(seed=42)
-# OVERNIGHT_SAMPLER = optuna.samplers.TPESampler()
+N_EPOCHS_FINAL_OVERNIGHT  = 100  # longer final training overnight
+HORIZONS = [2, 3, 4, 5, 6, 7, 14, 21, 30]
 
 
-def run_for_likelihood(likelihood_cls, out_dir_name: str) -> None:
-    """Run the full pipeline for one likelihood class."""
+def run_for_likelihood_and_horizons(likelihood_cls, out_dir_name: str) -> None:
+    """Run train+eval for one likelihood across all configured horizons."""
+    best_params_path = Path(out_dir_name) / "results" / "best_params_H1.txt"
+    if not best_params_path.exists():
+        raise FileNotFoundError(
+            f"Best-params file not found: {best_params_path}. "
+            "Run Optuna once for H=1 first."
+        )
+
     print("\n" + "=" * 72)
-    print(f"  Starting run: {likelihood_cls.__name__}")
-    print(f"  Output dir  : {out_dir_name}/")
+    print(f"  Starting train-only sweep: {likelihood_cls.__name__}")
+    print(f"  Output dir             : {out_dir_name}/")
+    print(f"  Best params source     : {best_params_path}")
+    print(f"  Horizons               : {HORIZONS}")
     print("=" * 72 + "\n")
 
-    main(
-        likelihood=likelihood_cls,
-        n_optuna_trials=N_OPTUNA_TRIALS_OVERNIGHT,
-        n_epochs_optuna=N_EPOCHS_OPTUNA_OVERNIGHT,
-        n_epochs_final=N_EPOCHS_FINAL_OVERNIGHT,
-        out_dir=Path(out_dir_name),
-        pruner=optuna.pruners.NopPruner(),   # no pruning — every trial runs to completion
-        sampler=OVERNIGHT_SAMPLER,
-    )
+    for h in HORIZONS:
+        print("\n" + "-" * 72)
+        print(f"  [{likelihood_cls.__name__}] Running H={h}")
+        print("-" * 72)
+        main(
+            likelihood=likelihood_cls,
+            n_epochs_final=N_EPOCHS_FINAL_OVERNIGHT,
+            out_dir=Path(out_dir_name),
+            horizon=h,
+            best_params_file=best_params_path,
+        )
 
 
 if __name__ == "__main__":
     # Gaussian first — faster, good sanity-check while gamma runs later
-    run_for_likelihood(GaussianLMCLikelihood, "outputs_gaussian")
+    run_for_likelihood_and_horizons(GaussianLMCLikelihood, "outputs_gaussian")
 
     # Gamma second — principled model for positive skewed reservoir volumes
-    # run_for_likelihood(ChainedGammaLikelihood, "outputs_gamma")
+    run_for_likelihood_and_horizons(ChainedGammaLikelihood, "outputs_gamma")
 
     print("\n" + "=" * 72)
     print("  Overnight run complete.")
-    print("  Results:")
-    print("    outputs_gaussian/results/metrics_H1.txt")
-    print("    outputs_gamma/results/metrics_H1.txt")
+    print("  Results are available under:")
+    print("    outputs_gaussian/results/metrics_H*.txt")
+    print("    outputs_gamma/results/metrics_H*.txt")
     print("=" * 72)
